@@ -1,0 +1,92 @@
+job('job-dsl-checkout') {
+    
+    scm {
+        github('PradeepYadav1788/jenkin', 'master')
+    }
+      
+   publishers {
+        downstream 'job-dsl-compile', 'SUCCESS'
+    }
+    
+}
+
+mavenJob('job-dsl-compile'){
+  
+  customWorkspace('C:\\Program Files (x86)\\Jenkins\\workspace\\job-dsl-checkout')
+  mavenInstallation('Maven 3.6.3')
+  goals('compile')
+    
+  publishers {
+        downstream 'job-dsl-package', 'SUCCESS'
+   }
+}
+
+mavenJob('job-dsl-package'){
+    customWorkspace('C:\\Program Files (x86)\\Jenkins\\workspace\\job-dsl-checkout')
+    mavenInstallation('Maven 3.6.3')
+    goals('package')
+    
+  publishers {
+        downstream 'job-dsl-docker-packaging', 'SUCCESS'
+  }
+}
+job('job-dsl-docker-packaging'){
+    sh...
+    sh "docker image pull tomcat:8.0"
+	docker container create --publish 8082:8080 --name my-tomcat-container tomcat:8.0
+	docker container start my-tomcat-container
+	COPY "C://Program Files (x86)//Jenkins//workspace//job-dsl-checkout//target" "/usr/local/tomcat/webapps/"
+	docker container run -it --publish 8081:8080 pradeep/tomcat:8.0
+	}
+	
+	def updateDockerFile () {
+    def BUILD_NUMBER = env.BUILD_NUMBER
+	def rtServer = Artifactory.server SERVER_ID
+    def rtDocker = Artifactory.docker server: rtServer
+    def buildInfo = Artifactory.newBuildInfo()
+    def tagName
+    sh "sed -i 's/docker.artifactory/${ARTDOCKER_REGISTRY}/' pradeep/tomcat:8.0'
+    sh 'sed -i "s/docker-framework:latest/docker-framework:$BUILD_NUMBER/" pradeep/tomcat:8.0'
+}
+	
+// Following test will work only if you have jenkins running outside kubernetes.
+//test docker image by runnning container
+def testFramework (tag) {
+    def result = true
+    docker.image(tag).withRun('-p 8181:8181') {c ->
+        sleep 10
+        //def stdout = sh(script: 'curl "http://localhost:8181/swampup/"', returnStdout: true)
+        //if (stdout.contains("Welcome Docker Lifecycle Training")) {
+            // println "*** Passed Test: " + stdout
+        //} else {
+         //   println "*** Failed Test: " + stdout
+        //    result = false
+        //}
+    }
+    sh "docker rmi ${tag}"
+    return true
+}
+node{ //Define all variables 
+def project = 'my-project' 
+def appName = 'my-first-microservice' 
+def serviceName = "${appName}-backend" 
+def imageVersion = 'development' 
+def namespace = 'development' 
+def imageTag = "gcr.io/${project}/${appName}:${imageVersion}.${env.BUILD_NUMBER}"
+Deploy Application stage('Deploy Application') { 
+switch (namespace) { //Roll out to Dev Environment case "development": // Create namespace if it doesn't exist 
+sh("kubectl get ns ${namespace} || kubectl create ns ${namespace}") //Update the imagetag to the latest version 
+sh("sed -i.bak 's#gcr.io/${project}/${appName}:${imageVersion}#${imageTag}#' ./k8s/development/*.yaml") //Create or update resources 
+sh("kubectl --namespace=${namespace} apply -f k8s/development/deployment.yaml") 
+sh("kubectl --namespace=${namespace} apply -f k8s/development/service.yaml") //Grab the external Ip address of the service 
+sh("echo http://`kubectl --namespace=${namespace} get service/${feSvcName} --output=json | jq -r '.status.loadBalancer.ingress[0].ip'` > ${feSvcName}") 
+break //Roll out to Dev Environment case "production": // Create namespace if it doesn't exist 
+sh("kubectl get ns ${namespace} || kubectl create ns ${namespace}") //Update the imagetag to the latest version 
+sh("sed -i.bak 's#gcr.io/${project}/${appName}:${imageVersion}#${imageTag}#' ./k8s/production/*.yaml") //Create or update resources 
+sh("kubectl --namespace=${namespace} apply -f k8s/production/deployment.yaml") 
+sh("kubectl --namespace=${namespace} apply -f k8s/production/service.yaml") //Grab the external Ip address of the service 
+sh("echo http://`kubectl --namespace=${namespace} get service/${feSvcName} --output=json | jq -r '.status.loadBalancer.ingress[0].ip'` > ${feSvcName}") break default: sh("kubectl get ns ${namespace} || kubectl create ns ${namespace}") 
+sh("sed -i.bak 's#gcr.io/${project}/${appName}:${imageVersion}#${imageTag}#' ./k8s/development/*.yaml") 
+sh("kubectl --namespace=${namespace} apply -f k8s/development/deployment.yaml") 
+sh("kubectl --namespace=${namespace} apply -f k8s/development/service.yaml") 
+sh("echo http://`kubectl --namespace=${namespace} get service/${feSvcName} --output=json | jq -r '.status.loadBalancer.ingress[0].ip'` > ${feSvcName}") break } }
